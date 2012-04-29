@@ -12,55 +12,21 @@
 #include <GL/gl.h>
 #include <GL/glut.h>
 
-#define CHECK_RC(rc, what)											\
-	if (rc != XN_STATUS_OK)											\
-	{																\
-		printf("%s failed: %s\n", what, xnGetStatusString(rc));		\
-		return rc;													\
-	}
-#define SAMPLE_XML_PATH "Sample-User.xml"
+int start();
 
-typedef struct {
-	unsigned char * texture;
-	float currentpos;
-	float currentheight;
-} tile;
-
-void updateSecondary();
-
-void glPrintString(void *font, char *str);
-
-float * getBoundary();
-void InitKinect();
-void StopCapture();
 void motorAngle(int angle);
 
-void CleanupExit();
-
-void StartCapture();
-
-XnBool AssignPlayer(XnUserID user);
-void XN_CALLBACK_TYPE NewUser(xn::UserGenerator& generator, XnUserID user, void* pCookie);
-void FindPlayer();
-void LostPlayer();
-void XN_CALLBACK_TYPE LostUser(xn::UserGenerator& generator, XnUserID user, void* pCookie);
-void XN_CALLBACK_TYPE PoseDetected(xn::PoseDetectionCapability& pose, const XnChar* strPose, XnUserID user, void* cxt);
-void XN_CALLBACK_TYPE CalibrationStarted(xn::SkeletonCapability& skeleton, XnUserID user, void* cxt);
-
-void XN_CALLBACK_TYPE CalibrationEnded(xn::SkeletonCapability& skeleton, XnUserID user, XnBool bSuccess, void* cxt);
-
-void XN_CALLBACK_TYPE CalibrationCompleted(xn::SkeletonCapability& skeleton, XnUserID user, XnCalibrationStatus eStatus, void* cxt);
-
-void DrawProjectivePoints(XnPoint3D& ptIn, int width, double r, double g, double b);
-// this function is called each frame
 void kinectDisplay (void);
 
-void glutIdle (void);
-void reset(void);
+static void displayError(const char *on_what);
 
-void glutKeyboard (unsigned char key, int x, int y);
-void glInit (int * pargc, char ** argv);
+void sendMessage(char * message);
 
+void initUDP(char * server);
+
+void controlUDP(char * server);
+
+void closeUDP();
 
 
 #endif /* KINECT_H_ */

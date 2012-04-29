@@ -4,17 +4,14 @@
 
 # Add inputs and outputs from these tool invocations to the build variables 
 CPP_SRCS += \
-../src/SceneDrawer.cpp \
 ../src/kinect.cpp \
 ../src/main.cpp 
 
 OBJS += \
-./src/SceneDrawer.o \
 ./src/kinect.o \
 ./src/main.o 
 
 CPP_DEPS += \
-./src/SceneDrawer.d \
 ./src/kinect.d \
 ./src/main.d 
 

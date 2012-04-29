@@ -8,31 +8,48 @@
 #include <XnOpenNI.h>
 #include <XnCodecIDs.h>
 #include <XnCppWrapper.h>
-#include "XnVNite.h"
 #include <GL/glut.h>
-//#include "SceneDrawer.h"
+#include <cmath>
 #include "kinect.h"
-
+//*********************************
+//Networking Includes
+  #include <stdio.h>
+  #include <unistd.h>
+  #include <stdlib.h>
+  #include <errno.h>
+  #include <string.h>
+  #include <time.h>
+  #include <sys/types.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+//********************************
 
 xn::Context g_Context;
 xn::ScriptNode g_ScriptNode;
 xn::DepthGenerator g_DepthGenerator;
-//xn::UserGenerator g_UserGenerator;
 
-XnVSessionManager * g_pSessionManager;
-//XnVBroadcaster* broadcaster;
+#define GL_WIN_SIZE_X 720
+#define GL_WIN_SIZE_Y 480
 
-unsigned char *image;
-xn::SceneMetaData sceneMD;
 xn::DepthMetaData depthMD;
-xn::ImageMetaData imageMD;
-const XnDepthPixel* pDepth;
 #define MAX_DEPTH 10000
 float g_pDepthHist[MAX_DEPTH];
+
+unsigned char* pDepthTexBuf;
+static int texWidth, texHeight;
 unsigned int nValue, nIndex, nX, nY, nNumberOfPoints;
 XnUInt16 g_nXRes, g_nYRes;
 unsigned char* pDestImage;
-unsigned char* pDepthTexBuf;
+const XnDepthPixel* pDepth;
+const XnRGB24Pixel* pixel;
+const XnLabel* pLabels;
+XnLabel label;
+XnUserID* aUsers;
+XnUInt16 nUsers;
+XnPoint3D com;
+
+volatile bool basic_data = false;
 
 // this function is called each frame
 void kinectDisplay (void)
@@ -46,12 +63,11 @@ void kinectDisplay (void)
 	g_DepthGenerator.GetMetaData(depthMD);
 	glOrtho(0, depthMD.XRes(), depthMD.YRes(), 0, -1.0, 1.0);
 
-
 	// Read next available data
 	g_Context.WaitAnyUpdateAll();
-	g_pSessionManager->Update(&g_Context);
+	texWidth = 640;
+	texHeight = 480;
 
-	//initialize loop variables
 	nValue = 0;
 	nIndex = 0;
 	nX = 0; nY = 0;
@@ -59,9 +75,11 @@ void kinectDisplay (void)
 	g_nXRes = depthMD.XRes();
 	g_nYRes = depthMD.YRes();
 
-	// Process the data
+	pDestImage = pDepthTexBuf;
+
 	pDepth = depthMD.Data();
 
+	// Calculate the accumulative histogram
 	memset(g_pDepthHist, 0, MAX_DEPTH*sizeof(float));
 	for (nY=0; nY<g_nYRes; nY++)
 	{
@@ -90,6 +108,7 @@ void kinectDisplay (void)
 			g_pDepthHist[nIndex] = (unsigned int)(256 * (1.0f - (g_pDepthHist[nIndex] / nNumberOfPoints)));
 		}
 	}
+
 	pDepth = (short unsigned int*)depthMD.Data();
 	for (nY=0; nY<g_nYRes; nY++)
 	{
@@ -97,72 +116,82 @@ void kinectDisplay (void)
 		{
 
 			nValue = *pDepth;
-//			//printf("Depth: %i \n",nValue);
-
-			pDestImage[0] = nValue * .15;
-			pDestImage[1] = nValue * .70;
-			pDestImage[2] = nValue * .15;
+			pDestImage[0] = g_pDepthHist[nValue];//pixel->nRed;
+			pDestImage[1] = g_pDepthHist[nValue];//pixel->nGreen;
+			pDestImage[2] = g_pDepthHist[nValue];//pixel->nBlue;
 			pDestImage[3] = 255;
 
+			if (g_pDepthHist[nValue] > 155) {
+				pDestImage[0] = 255;
+				pDestImage[1] = 0;
+				pDestImage[2] = 0;
+				basic_data = true;
+//				sendMessage("Vibrate");
+			}
 
+
+			pixel++;
 			pDepth++;
 			pDestImage+=4;
 		}
 
-		pDestImage += (640 - g_nXRes) *4;
+		pDestImage += (texWidth - g_nXRes) *4;
 	}
 
 	// Display the OpenGL texture map
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 640, 480, 0, GL_RGBA, GL_UNSIGNED_BYTE, pDepthTexBuf);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texWidth, texHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, pDepthTexBuf);
+	//DrawDepthMap(depthMD);
 
-	//	DrawDepthMap(depthMD, sceneMD, focus, imageMD);
-
+	glPopMatrix();
 }
 
-// callback for session start
-void XN_CALLBACK_TYPE SessionStarting(const XnPoint3D& ptPosition, void* UserCxt)
-{
-	printf("Session start: (%f,%f,%f)\n", ptPosition.X, ptPosition.Y, ptPosition.Z);
-//	g_SessionState = IN_SESSION;
-}
-// Callback for session end
-void XN_CALLBACK_TYPE SessionEnding(void* UserCxt)
-{
-	printf("Session end\n");
-//	g_SessionState = NOT_IN_SESSION;
+
+#define SAMPLE_XML_PATH "Sample-User.xml"
+
+#define CHECK_RC(rc, what)											\
+	if (rc != XN_STATUS_OK)											\
+	{																\
+		printf("%s failed: %s\n", what, xnGetStatusString(rc));		\
+		return rc;													\
+	}
+
+#define CHECK_ERRORS(rc, errors, what)		\
+	if (rc == XN_STATUS_NO_NODE_PRESENT)	\
+{										\
+	XnChar strError[1024];				\
+	errors.ToString(strError, 1024);	\
+	printf("%s\n", strError);			\
+	return (rc);						\
 }
 
-// Callback for when the focus is in progress
-void XN_CALLBACK_TYPE FocusProgress(const XnChar* strFocus, const XnPoint3D& ptPosition, XnFloat fProgress, void* UserCxt)
-{
-//	g_UserGenerator.
-	printf("Focus progress: %s @(%f,%f,%f): %f\n", strFocus, ptPosition.X, ptPosition.Y, ptPosition.Z, fProgress);
-}
-
+extern unsigned char* pDepthTexBuf;
+extern XnUserID* aUsers;
 
 #include <XnUSB.h>
 #define VID_MICROSOFT 0x45e
 #define PID_NUI_MOTOR 0x02b0
 XN_USB_DEV_HANDLE dev;
 
-void InitKinect(){
-	pDestImage = (unsigned char *)malloc(sizeof(unsigned char)*640*480*4);
+int start(){
+	pDepthTexBuf = (unsigned char *)malloc(sizeof(char)*(640*480*4));
+	aUsers  = (XnUserID *)malloc(sizeof(XnUserID)*15);
 
 	XnStatus rc = XN_STATUS_OK;
 	xn::EnumerationErrors errors;
 
 	rc = g_Context.InitFromXmlFile(SAMPLE_XML_PATH, g_ScriptNode, &errors);
-	rc = g_Context.FindExistingNode(XN_NODE_TYPE_DEPTH, g_DepthGenerator);
-//	rc = g_Context.FindExistingNode(XN_NODE_TYPE_USER, g_UserGenerator);
+	CHECK_ERRORS(rc, errors, "InitFromXmlFile");
+	CHECK_RC(rc, "InitFromXml");
 
-	g_pSessionManager = new XnVSessionManager();
-	rc = g_pSessionManager->Initialize(&g_Context, "Click,Wave", "RaiseHand");
-	g_pSessionManager->RegisterSession(NULL, SessionStarting, SessionEnding, FocusProgress);
+	rc = g_Context.FindExistingNode(XN_NODE_TYPE_DEPTH, g_DepthGenerator);
+	CHECK_RC(rc, "Find depth generator");
 
 	rc = g_Context.StartGeneratingAll();
+	CHECK_RC(rc, "StartGenerating");
 
 	motorAngle(10);
 
+	return 0;
 }
 
 void motorAngle(int angle){
@@ -181,6 +210,98 @@ void motorAngle(int angle){
 	xnUSBCloseDevice(dev);
 }
 
+//UDP Globals
+int z;
+struct sockaddr_in adr_inet; // AF_INET
+struct sockaddr_in adr_clnt; // AF_INET
+unsigned int len_inet;                // length
+int s;                       // Socket
+char dgram[512];             // Recv buffer
+
+/*
+ * This function reports the error and
+ * exits back to the shell:
+ */
+static void displayError(const char *on_what) {
+	fputs(strerror(errno),stderr);
+	fputs(": ",stderr);
+	fputs(on_what,stderr);
+	fputc('\n',stderr);
+	exit(1);
+}
+
+void sendMessage(char *message) {
+	z = sendto(s, message, 7, 0, (struct sockaddr *)&adr_clnt, len_inet);     // Client address length
+	if ( z < 0 ) {
+		displayError("sendto(2)");
+	}
+//	sleep(100);
+	return;
+}
+
+void initUDP(char * server){
+	printf("Waiting for client...\n");
+	memset(&adr_inet,0,sizeof adr_inet);
+	adr_inet.sin_family = AF_INET;
+	adr_inet.sin_port = htons(10001);
+	adr_inet.sin_addr.s_addr =
+			inet_addr(server);
+
+	/*
+	 * Create a UDP socket to use:
+	 */
+	s = socket(AF_INET,SOCK_DGRAM,0);
+	if ( s == -1 ) {
+		displayError("socket()");
+	}
+
+	if ( adr_inet.sin_addr.s_addr == INADDR_NONE ) {
+		displayError("bad address.");
+	}
+	len_inet = sizeof adr_inet;
+
+	//Bind the address to a datagram socket (UDP)
+	z = bind(s, (struct sockaddr *)&adr_inet, len_inet);
+	if ( z == -1 ) {
+		displayError("bind()");
+	}
 
 
+	z = recvfrom(s,	dgram, sizeof dgram, 0, (struct sockaddr *)&adr_clnt, &len_inet);
+	if ( z < 0 ) {
+		displayError("recvfrom(2)");
+	}
+
+	printf("Result from %s port %u :\n\t'%s'\n",
+	        inet_ntoa(adr_clnt.sin_addr),
+	                 (unsigned)ntohs(adr_clnt.sin_port),
+	                 dgram);
+	return;
+}
+
+void controlUDP(char * server){
+	printf("Waiting for client...\n");
+	memset(&adr_inet,0,sizeof adr_inet);
+	adr_inet.sin_family = AF_INET;
+	adr_inet.sin_port = htons(10001);
+	adr_inet.sin_addr.s_addr =
+			inet_addr(server);
+
+
+	z = recvfrom(s,	dgram, sizeof dgram, 0, (struct sockaddr *)&adr_clnt, &len_inet);
+	if ( z < 0 ) {
+		displayError("recvfrom(2)");
+	}
+
+	printf("Result from %s port %u :\n\t'%s'\n",
+	        inet_ntoa(adr_clnt.sin_addr),
+	                 (unsigned)ntohs(adr_clnt.sin_port),
+	                 dgram);
+	return;
+}
+
+void closeUDP(){
+	close(s);
+	return;
+}
 
